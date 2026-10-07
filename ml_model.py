@@ -67,29 +67,42 @@ def buscar_en_nube(
 
     cliente = openai.OpenAI(api_key=api_key)
     estructura_prompt = estructura if estructura != "Indiferente" else "Instrumental o Vocal"
-    prompt = (
+    prompt_experto = (
         f"Eres un DJ de música underground y crate digger. Actúa como una base "
-        f"de datos. Necesito {cantidad_necesaria} canciones reales de música "
-        f"electrónica (género: {genero}, estructura: {estructura_prompt}, nivel "
-        f"de energía de 1-10: {energia}). REGLAS DE ORO: 1) El artista NO "
-        f"puede ser {artista_excluir} ni nadie mainstream. 2) El BPM DEBE estar "
-        f"entre {int(bpm_orig) - 3} y {int(bpm_orig) + 3}. 3) La clave armónica "
+        f"de datos. Necesito {cantidad_necesaria} canciones reales y "
+        f"verificables de música electrónica (género: {genero}, estructura: "
+        f"{estructura_prompt}, nivel de energía de 1-10: {energia}). REGLAS "
+        f"ESTRICTAS: 1) PROHIBIDO inventar canciones. Incluye solo pistas "
+        f"reales y verificables. 2) PROHIBIDA la música comercial (EDM, "
+        f"Mainstage o Radio). Excluye siempre al artista '{artista_excluir}'. "
+        f"3) Busca preferentemente en catálogos de sellos de culto como "
+        f"Afterlife, Keinemusik, Drumcode, KNTXT, Innervisions, Solid Grooves, "
+        f"Tresor, Kompakt, Defected o similares. 4) El BPM DEBE estar entre "
+        f"{int(bpm_orig) - 3} y {int(bpm_orig) + 3}. 5) La clave armónica "
         f"DEBE ser compatible con {key_orig} según la Rueda Camelot. Devuelve "
-        "ÚNICAMENTE un array JSON válido donde cada objeto tenga las claves "
-        "exactas: titulo, artista, genero, bpm (int), key_camelot, energia "
-        "(int), estructura, sello. No escribas markdown ni texto fuera del JSON."
+        "ÚNICAMENTE un objeto JSON válido con la clave 'canciones', cuyo valor "
+        "sea un array de objetos con las claves exactas: titulo, artista, "
+        "genero, bpm (int), key_camelot, energia (int), estructura, sello. "
+        "Ejemplo de JSON válido: "
+        '{{"canciones": [{{"titulo": "The Age of Love (Charlotte de Witte '
+        'Remix)", "artista": "Age of Love", "genero": "Techno", "bpm": 130, '
+        '"key_camelot": "8A", "energia": 8, "estructura": "Instrumental", '
+        '"sello": "KNTXT"}}]}}. No escribas markdown ni texto fuera del JSON.'
     )
 
     try:
         respuesta = cliente.chat.completions.create(
             model="gpt-4o-mini",
-            temperature=0,
+            temperature=0.2,
             messages=[
                 {
                     "role": "system",
-                    "content": "Responde únicamente con un array JSON válido.",
+                    "content": (
+                        "Responde únicamente con un objeto JSON válido que "
+                        "contenga la clave 'canciones'."
+                    ),
                 },
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": prompt_experto},
             ],
         )
     except openai.OpenAIError as error:
@@ -158,16 +171,73 @@ def buscar_en_nube(
     return dataframe_nuevo
 
 
+def analizar_referencia(api_key, cancion, artista):
+    """Obtiene el BPM y la clave Camelot de una canción mediante OpenAI."""
+    if not api_key:
+        raise ValueError(
+            "Introduce la clave de OpenAI para poder analizar la canción."
+        )
+
+    cliente = openai.OpenAI(api_key=api_key)
+    try:
+        respuesta = cliente.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres un analizador musical. Tu único trabajo es "
+                        'devolver el BPM exacto (int) y la Clave Camelot '
+                        '(string, ej. "8A") de la canción dada. Devuelve '
+                        'SOLO un JSON con las claves "bpm" y "key_camelot". '
+                        "Si no estás 100% seguro, haz tu mejor estimación "
+                        "basada en el género."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Canción: {cancion} - Artista: {artista}",
+                },
+            ],
+        )
+    except openai.OpenAIError as error:
+        raise ValueError(f"No se pudo analizar la referencia con OpenAI: {error}") from error
+
+    contenido = respuesta.choices[0].message.content
+    if not contenido:
+        raise ValueError("OpenAI devolvió una respuesta vacía.")
+
+    try:
+        datos = json.loads(contenido)
+        bpm = int(datos["bpm"])
+        key_camelot = str(datos["key_camelot"]).strip().upper()
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "OpenAI no devolvió un análisis válido de BPM y clave Camelot."
+        ) from error
+
+    return bpm, key_camelot
+
+
 def recomendar_matches(
+    cancion,
     artista_usuario,
     genero,
     energia,
     estructura,
-    bpm_orig,
-    key_orig,
-    api_key=None,
+    api_key,
+    bpm_orig=None,
+    key_orig=None,
 ):
     """Devuelve hasta tres canciones compatibles con el patrón introducido."""
+    if bpm_orig is None or key_orig is None:
+        bpm_orig, key_orig = analizar_referencia(
+            api_key,
+            cancion,
+            artista_usuario,
+        )
     dataframe = cargar_datos()
 
     artista_usuario = str(artista_usuario).strip()
