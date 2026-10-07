@@ -1,4 +1,12 @@
+# Dependencias principales de la aplicación
 streamlit
 pandas
 numpy
 scikit-learn
+
+# Análisis local de BPM a partir de archivos MP3/WAV
+librosa
+soundfile
+
+# Fallback opcional para completar resultados locales
+openai

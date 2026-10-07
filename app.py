@@ -1,8 +1,13 @@
 """Interfaz Streamlit de Underground Matcher Local."""
 
+import io
+import hashlib
 from urllib.parse import quote_plus
 
+import librosa
+import numpy as np
 import pandas as pd
+import soundfile as sf
 import streamlit as st
 
 from database import COLUMNAS_REQUERIDAS, cargar_datos, guardar_datos
@@ -23,6 +28,36 @@ CLAVES_CAMELOT = [
     for numero in range(1, 13)
     for letra in ("A", "B")
 ]
+
+
+@st.cache_data(show_spinner=False)
+def analizar_audio(archivo_subido):
+    """Estima el BPM de un archivo de audio a partir de su beat tracking."""
+    if not archivo_subido:
+        raise ValueError("El archivo de audio está vacío.")
+
+    audio, frecuencia_muestreo = librosa.load(
+        io.BytesIO(archivo_subido),
+        sr=None,
+        mono=True,
+    )
+    if audio.size == 0:
+        raise ValueError("El archivo de audio no contiene muestras.")
+
+    tempo, _ = librosa.beat.beat_track(
+        y=audio,
+        sr=frecuencia_muestreo,
+    )
+    valores_tempo = np.asarray(tempo).reshape(-1)
+    if valores_tempo.size == 0 or not np.isfinite(valores_tempo[0]):
+        raise ValueError("No se pudo estimar un BPM válido.")
+
+    bpm_detectado = int(round(float(valores_tempo[0])))
+    if not 40 <= bpm_detectado <= 220:
+        raise ValueError(
+            f"El BPM detectado ({bpm_detectado}) está fuera del rango permitido."
+        )
+    return bpm_detectado
 
 
 def url_youtube(titulo, artista):
@@ -75,6 +110,18 @@ st.caption(
 
 
 with st.sidebar:
+    st.header("☁️ Sistema híbrido")
+    openai_api_key = st.text_input(
+        "OpenAI API Key",
+        type="password",
+        help="Opcional: solo se usa si el dataset local devuelve menos de 3 resultados.",
+    )
+    st.caption(
+        "Primero se buscan matches en dataset.csv. La nube solo completa los "
+        "resultados que falten y los guarda en el dataset local."
+    )
+
+    st.divider()
     st.header("📥 Carga masiva de entrenamiento")
     st.write(
         "El CSV debe incluir: titulo, artista, genero, bpm, "
@@ -115,12 +162,34 @@ with columna_izquierda:
         "Artista original",
         placeholder="Obligatorio para excluirlo",
     )
+    archivo_audio = st.file_uploader(
+        "🎵 Arrastra tu track para auto-detectar BPM (MP3/WAV)",
+        type=["mp3", "wav"],
+        help="El análisis se ejecuta localmente y no sube el audio a ningún servicio.",
+    )
+
+    if "bpm_original" not in st.session_state:
+        st.session_state["bpm_original"] = 126
+
+    if archivo_audio is not None:
+        bytes_audio = archivo_audio.getvalue()
+        huella_audio = hashlib.sha256(bytes_audio).hexdigest()
+        if st.session_state.get("audio_analizado") != huella_audio:
+            try:
+                with st.spinner("Analizando ondas de sonido..."):
+                    bpm_detectado = analizar_audio(bytes_audio)
+                st.session_state["bpm_original"] = bpm_detectado
+                st.session_state["audio_analizado"] = huella_audio
+                st.success(f"BPM detectado automáticamente: {bpm_detectado}")
+            except (ValueError, OSError, RuntimeError, sf.SoundFileError) as error:
+                st.error(f"No se pudo analizar el audio: {error}")
+
     bpm_original = st.number_input(
         "BPM de la pista",
         min_value=40,
         max_value=220,
-        value=126,
         step=1,
+        key="bpm_original",
     )
     key_original = st.selectbox(
         "Clave armónica (Camelot)",
@@ -154,18 +223,21 @@ if st.button(
     if not artista_original.strip():
         st.warning("Introduce el artista original para continuar.")
     else:
-        resultados = recomendar_matches(
-            artista_usuario=artista_original,
-            genero=genero_buscado,
-            energia=energia_deseada,
-            estructura=estructura_buscada,
-            bpm_orig=bpm_original,
-            key_orig=key_original,
-        )
-
-        st.session_state["resultados"] = resultados
-        st.session_state["referencia"] = cancion_referencia.strip()
-        st.session_state["artista_referencia"] = artista_original.strip()
+        try:
+            resultados = recomendar_matches(
+                artista_usuario=artista_original,
+                genero=genero_buscado,
+                energia=energia_deseada,
+                estructura=estructura_buscada,
+                bpm_orig=bpm_original,
+                key_orig=key_original,
+                api_key=openai_api_key.strip() or None,
+            )
+            st.session_state["resultados"] = resultados
+            st.session_state["referencia"] = cancion_referencia.strip()
+            st.session_state["artista_referencia"] = artista_original.strip()
+        except ValueError as error:
+            st.error(str(error))
 
 
 if "resultados" in st.session_state:
