@@ -232,12 +232,11 @@ def recomendar_matches(
     key_orig=None,
 ):
     """Devuelve hasta tres canciones compatibles con el patrón introducido."""
-    if bpm_orig is None or key_orig is None:
-        bpm_orig, key_orig = analizar_referencia(
-            api_key,
-            cancion,
-            artista_usuario,
-        )
+    bpm_orig, key_orig = analizar_referencia(
+        api_key,
+        cancion,
+        artista_usuario,
+    )
     dataframe = cargar_datos()
 
     artista_usuario = str(artista_usuario).strip()
