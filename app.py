@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from database import COLUMNAS_REQUERIDAS, cargar_datos, guardar_datos
-from ml_model import analizar_referencia, recomendar_matches
+from ml_model import recomendar_matches
 
 
 st.set_page_config(
@@ -151,23 +151,16 @@ if st.button(
     else:
         api_key = api_key.strip()
         try:
-            bpm_orig, key_orig = analizar_referencia(
-                api_key=api_key,
-                cancion=cancion_referencia,
-                artista=artista_original,
-            )
-            st.success(
-                f"Análisis completado: {bpm_orig} BPM · clave {key_orig}"
-            )
-            resultados = recomendar_matches(
+            resultados, bpm_orig, key_orig = recomendar_matches(
                 cancion=cancion_referencia,
                 artista_usuario=artista_original,
                 genero=genero_buscado,
                 energia=energia_deseada,
                 estructura=estructura_buscada,
                 api_key=api_key,
-                bpm_orig=bpm_orig,
-                key_orig=key_orig,
+            )
+            st.success(
+                f"Análisis completado: {bpm_orig} BPM · clave {key_orig}"
             )
         except ValueError as error:
             st.error(str(error))
