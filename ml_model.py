@@ -1,10 +1,35 @@
 """Motor matemático local de recomendación."""
 
+import re
+import unicodedata
+from difflib import SequenceMatcher
 from urllib.parse import quote_plus
 
 import numpy as np
 
 from database import obtener_dataset
+
+
+def _normalizar_texto(texto):
+    """Normaliza nombres para comparar artistas sin depender de mayúsculas o acentos."""
+    texto = unicodedata.normalize("NFKD", str(texto))
+    texto = "".join(caracter for caracter in texto if not unicodedata.combining(caracter))
+    return re.sub(r"[^a-z0-9]+", " ", texto.casefold()).strip()
+
+
+def _artistas_coinciden(artista_entrada, artista_dataset):
+    """Detecta coincidencias exactas y variantes muy similares del artista."""
+    entrada = _normalizar_texto(artista_entrada)
+    candidato = _normalizar_texto(artista_dataset)
+    if not entrada or not candidato:
+        return False
+    if entrada == candidato:
+        return True
+
+    # Evita recomendar variantes como "Artist" y "Artist Remix/Live".
+    if len(entrada) >= 4 and (entrada in candidato or candidato in entrada):
+        return True
+    return SequenceMatcher(None, entrada, candidato).ratio() >= 0.82
 
 
 def _normalizar_camelot(clave):
@@ -35,15 +60,23 @@ def _patron_referencia(genero, energia):
 
 
 def recomendar_matches(cancion_input, artista_input, genero, energia_deseada, estructura_deseada):
-    """Devuelve las tres mejores canciones, sin repetir el artista de entrada."""
+    """Recomienda por patrones, sin buscar la canción de entrada en el dataset.
+
+    ``cancion_input`` se conserva como contexto de la interfaz, pero no se usa
+    para filtrar ni exigir que exista en la base local.
+    """
+    del cancion_input
     dataset = obtener_dataset()
-    artista_normalizado = str(artista_input).strip().casefold()
     candidatos = dataset[dataset["genero"] == genero].copy()
 
     if estructura_deseada != "Indiferente":
         candidatos = candidatos[candidatos["estructura"] == estructura_deseada]
-    if artista_normalizado:
-        candidatos = candidatos[candidatos["artista"].str.casefold() != artista_normalizado]
+    if str(artista_input).strip():
+        candidatos = candidatos[
+            ~candidatos["artista"].map(
+                lambda artista: _artistas_coinciden(artista_input, artista)
+            )
+        ]
 
     bpm_origen, key_origen = _patron_referencia(genero, energia_deseada)
     if candidatos.empty:
@@ -55,7 +88,7 @@ def recomendar_matches(cancion_input, artista_input, genero, energia_deseada, es
         lambda clave: _distancia_camelot(key_origen, clave)
     )
     candidatos["puntuacion"] = (
-        100
+        100  # Todos los candidatos ya tienen afinidad de género tras el filtro.
         - candidatos["distancia_energia"] * 12
         - candidatos["distancia_bpm"] * 1.8
         - candidatos["distancia_camelot"] * 5

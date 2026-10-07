@@ -1,6 +1,9 @@
+import hashlib
+from io import StringIO
+
 import streamlit as st
 
-from database import guardar_nueva_cancion
+from database import cargar_csv_entrenamiento, guardar_nueva_cancion
 from ml_model import recomendar_matches
 
 
@@ -102,6 +105,49 @@ with st.sidebar:
             st.success(f"Añadida: {cancion_anadida['titulo']}")
         except (TypeError, ValueError) as error:
             st.error(str(error))
+
+    st.divider()
+    st.header("📥 Carga Masiva de Entrenamiento")
+    st.caption(
+        "Sube cientos de canciones en un CSV. Las filas nuevas se incorporan "
+        "al dataset local y estarán disponibles inmediatamente."
+    )
+    plantilla_csv = StringIO()
+    plantilla_csv.write(
+        "titulo,artista,genero,bpm,key_camelot,energia,estructura,sello\n"
+        "Ejemplo Track,Ejemplo Artist,Techno,128,8A,7,Instrumental,Sello Local\n"
+    )
+    st.download_button(
+        "⬇ Descargar plantilla CSV",
+        data=plantilla_csv.getvalue(),
+        file_name="plantilla_entrenamiento.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    archivo_csv = st.file_uploader(
+        "Selecciona tu archivo de entrenamiento",
+        type=["csv"],
+        help=(
+            "Columnas obligatorias: titulo, artista, genero, bpm, "
+            "key_camelot, energia y estructura."
+        ),
+    )
+
+    if archivo_csv is not None:
+        contenido_csv = archivo_csv.getvalue()
+        huella_csv = hashlib.sha256(contenido_csv).hexdigest()
+        if st.session_state.get("csv_entrenado") != huella_csv:
+            try:
+                canciones_anadidas = cargar_csv_entrenamiento(StringIO(contenido_csv.decode("utf-8-sig")))
+                st.session_state["csv_entrenado"] = huella_csv
+                if canciones_anadidas:
+                    st.success(
+                        f"✅ Carga completada: {canciones_anadidas} canciones añadidas."
+                    )
+                else:
+                    st.info("El CSV no contenía canciones nuevas.")
+            except (UnicodeDecodeError, ValueError) as error:
+                st.error(f"No se pudo cargar el CSV: {error}")
 
 
 with st.form("busqueda"):

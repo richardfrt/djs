@@ -9,6 +9,16 @@ from copy import deepcopy
 import pandas as pd
 
 
+COLUMNAS_CSV_OBLIGATORIAS = [
+    "titulo",
+    "artista",
+    "genero",
+    "bpm",
+    "key_camelot",
+    "energia",
+    "estructura",
+]
+
 COLUMNAS_DATASET = [
     "id",
     "titulo",
@@ -123,3 +133,134 @@ def guardar_nueva_cancion(nueva_fila):
     CANCIONES.append([nueva[columna] for columna in COLUMNAS_DATASET if columna != "sello"])
     SELLOS_POR_ID[nueva["id"]] = str(nueva_fila.get("sello") or "Sello independiente").strip()
     return deepcopy(nueva)
+
+
+def cargar_csv_entrenamiento(archivo):
+    """Valida y añade canciones desde un CSV al dataset local en memoria.
+
+    El CSV debe incluir las columnas de ``COLUMNAS_CSV_OBLIGATORIAS``. Las
+    columnas opcionales ``sello``, ``sello_independiente`` y ``tags_match``
+    reciben valores seguros cuando no están presentes. La operación es
+    atómica: si alguna fila no es válida, no se añade ninguna canción.
+    """
+    try:
+        dataframe = pd.read_csv(archivo)
+    except (OSError, UnicodeDecodeError, pd.errors.ParserError) as error:
+        raise ValueError(f"No se pudo leer el CSV: {error}") from error
+
+    dataframe.columns = [str(columna).strip() for columna in dataframe.columns]
+    faltantes = [
+        columna
+        for columna in COLUMNAS_CSV_OBLIGATORIAS
+        if columna not in dataframe.columns
+    ]
+    if faltantes:
+        raise ValueError(
+            "El CSV no contiene las columnas obligatorias: "
+            + ", ".join(faltantes)
+        )
+    if dataframe.empty:
+        raise ValueError("El CSV no contiene canciones.")
+
+    filas_normalizadas = []
+    errores = []
+    existentes = {
+        (str(fila[1]).strip().casefold(), str(fila[2]).strip().casefold())
+        for fila in CANCIONES
+    }
+    vistos_csv = set()
+
+    for numero_fila, (_, fila) in enumerate(dataframe.iterrows(), start=2):
+        datos = fila.to_dict()
+        datos["sello"] = datos.get("sello", "Sello independiente")
+        datos["sello_independiente"] = datos.get("sello_independiente", True)
+        tags = datos.get("tags_match", "")
+        if pd.isna(tags) or not str(tags).strip():
+            datos["tags_match"] = ["underground"]
+        elif isinstance(tags, str):
+            datos["tags_match"] = [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+        try:
+            normalizada = _normalizar_cancion(datos)
+            clave = (
+                normalizada["artista"].casefold(),
+                normalizada["titulo"].casefold(),
+            )
+            if clave in existentes or clave in vistos_csv:
+                continue
+            normalizada["id"] = max(
+                (registro[0] for registro in CANCIONES), default=0
+            ) + len(filas_normalizadas) + 1
+            vistos_csv.add(clave)
+            filas_normalizadas.append(normalizada)
+        except (TypeError, ValueError, OverflowError) as error:
+            errores.append(f"Fila {numero_fila}: {error}")
+
+    if errores:
+        detalle = "\n".join(errores[:10])
+        if len(errores) > 10:
+            detalle += f"\n... y {len(errores) - 10} errores más."
+        raise ValueError(f"El CSV contiene filas inválidas:\n{detalle}")
+
+    for cancion in filas_normalizadas:
+        CANCIONES.append([cancion[columna] for columna in COLUMNAS_DATASET if columna != "sello"])
+        SELLOS_POR_ID[cancion["id"]] = cancion["sello"]
+
+    return len(filas_normalizadas)
+
+
+def _normalizar_cancion(nueva_fila):
+    """Valida una canción y asigna un ID, sin modificar todavía el dataset."""
+    obligatorias = set(COLUMNAS_CSV_OBLIGATORIAS)
+    faltantes = obligatorias - set(nueva_fila)
+    if faltantes:
+        raise ValueError(f"Faltan campos obligatorios: {', '.join(sorted(faltantes))}")
+
+    titulo = str(nueva_fila["titulo"]).strip()
+    artista = str(nueva_fila["artista"]).strip()
+    if not titulo or not artista:
+        raise ValueError("El título y el artista no pueden estar vacíos.")
+
+    genero = str(nueva_fila["genero"]).strip()
+    estructura = str(nueva_fila["estructura"]).strip()
+    if genero not in {"Techno", "Tech House", "Melodic"}:
+        raise ValueError("El género debe ser Techno, Tech House o Melodic.")
+    if estructura not in {"Instrumental", "Vocal"}:
+        raise ValueError("La estructura debe ser Instrumental o Vocal.")
+
+    bpm = int(nueva_fila["bpm"])
+    energia = int(nueva_fila["energia"])
+    if not 80 <= bpm <= 180:
+        raise ValueError("El BPM debe estar entre 80 y 180.")
+    if not 1 <= energia <= 10:
+        raise ValueError("La energía debe estar entre 1 y 10.")
+
+    clave = str(nueva_fila["key_camelot"]).strip().upper()
+    if (
+        len(clave) < 2
+        or not clave[:-1].isdigit()
+        or clave[-1] not in {"A", "B"}
+        or not 1 <= int(clave[:-1]) <= 12
+    ):
+        raise ValueError("La clave Camelot debe tener el formato 1A-12B.")
+
+    tags = nueva_fila.get("tags_match", ["underground"])
+    if isinstance(tags, str):
+        tags = tags.split(",")
+    tags = [str(tag).strip().lower() for tag in tags if str(tag).strip()]
+    if not tags:
+        tags = ["underground"]
+
+    return {
+        "id": max((fila[0] for fila in CANCIONES), default=0) + 1,
+        "titulo": titulo,
+        "artista": artista,
+        "genero": genero,
+        "bpm": bpm,
+        "key_camelot": clave,
+        "energia": energia,
+        "estructura": estructura,
+        "sello_independiente": bool(nueva_fila.get("sello_independiente", True)),
+        "sello": str(nueva_fila.get("sello") or "Sello independiente").strip(),
+        "tags_match": tags,
+    }
