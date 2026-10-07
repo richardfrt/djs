@@ -1,7 +1,7 @@
 """Interfaz Streamlit de Underground Matcher Local."""
 
-import io
 import hashlib
+import io
 from urllib.parse import quote_plus
 
 import librosa
@@ -29,35 +29,29 @@ CLAVES_CAMELOT = [
     for letra in ("A", "B")
 ]
 
+if "bpm_actual" not in st.session_state:
+    st.session_state.bpm_actual = 126
+
 
 @st.cache_data(show_spinner=False)
-def analizar_audio(archivo_subido):
-    """Estima el BPM de un archivo de audio a partir de su beat tracking."""
-    if not archivo_subido:
+def extraer_bpm(archivo_audio):
+    """Extrae el tempo aproximado de los primeros 30 segundos del audio."""
+    if not archivo_audio:
         raise ValueError("El archivo de audio está vacío.")
 
-    audio, frecuencia_muestreo = librosa.load(
-        io.BytesIO(archivo_subido),
-        sr=None,
-        mono=True,
-    )
-    if audio.size == 0:
+    y, sr = librosa.load(io.BytesIO(archivo_audio), duration=30)
+    if y.size == 0:
         raise ValueError("El archivo de audio no contiene muestras.")
 
-    tempo, _ = librosa.beat.beat_track(
-        y=audio,
-        sr=frecuencia_muestreo,
-    )
+    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
     valores_tempo = np.asarray(tempo).reshape(-1)
     if valores_tempo.size == 0 or not np.isfinite(valores_tempo[0]):
-        raise ValueError("No se pudo estimar un BPM válido.")
+        raise ValueError("No se pudo detectar un BPM válido.")
 
-    bpm_detectado = int(round(float(valores_tempo[0])))
-    if not 40 <= bpm_detectado <= 220:
-        raise ValueError(
-            f"El BPM detectado ({bpm_detectado}) está fuera del rango permitido."
-        )
-    return bpm_detectado
+    bpm = int(round(float(valores_tempo[0])))
+    if not 40 <= bpm <= 220:
+        raise ValueError(f"El BPM detectado ({bpm}) está fuera de rango.")
+    return bpm
 
 
 def url_youtube(titulo, artista):
@@ -110,17 +104,12 @@ st.caption(
 
 
 with st.sidebar:
-    st.header("☁️ Sistema híbrido")
-    openai_api_key = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        help="Opcional: solo se usa si el dataset local devuelve menos de 3 resultados.",
-    )
+    st.header("🧠 Cerebro IA (Agente Explorador)")
+    api_key = st.text_input("OpenAI API Key", type="password")
     st.caption(
-        "Primero se buscan matches en dataset.csv. La nube solo completa los "
-        "resultados que falten y los guarda en el dataset local."
+        "Opcional. Si la introduces, la IA completará resultados cuando el "
+        "dataset local no tenga tres coincidencias."
     )
-
     st.divider()
     st.header("📥 Carga masiva de entrenamiento")
     st.write(
@@ -163,24 +152,19 @@ with columna_izquierda:
         placeholder="Obligatorio para excluirlo",
     )
     archivo_audio = st.file_uploader(
-        "🎵 Arrastra tu track para auto-detectar BPM (MP3/WAV)",
+        "🎵 Opcional: Arrastra tu MP3 para auto-detectar BPM",
         type=["mp3", "wav"],
-        help="El análisis se ejecuta localmente y no sube el audio a ningún servicio.",
     )
-
-    if "bpm_original" not in st.session_state:
-        st.session_state["bpm_original"] = 126
-
     if archivo_audio is not None:
-        bytes_audio = archivo_audio.getvalue()
-        huella_audio = hashlib.sha256(bytes_audio).hexdigest()
-        if st.session_state.get("audio_analizado") != huella_audio:
+        contenido_audio = archivo_audio.getvalue()
+        huella_audio = hashlib.sha256(contenido_audio).hexdigest()
+        if st.session_state.get("audio_procesado") != huella_audio:
             try:
                 with st.spinner("Analizando ondas de sonido..."):
-                    bpm_detectado = analizar_audio(bytes_audio)
-                st.session_state["bpm_original"] = bpm_detectado
-                st.session_state["audio_analizado"] = huella_audio
-                st.success(f"BPM detectado automáticamente: {bpm_detectado}")
+                    bpm_detectado = extraer_bpm(contenido_audio)
+                st.session_state.bpm_actual = bpm_detectado
+                st.session_state.audio_procesado = huella_audio
+                st.success(f"BPM detectado: {bpm_detectado}")
             except (ValueError, OSError, RuntimeError, sf.SoundFileError) as error:
                 st.error(f"No se pudo analizar el audio: {error}")
 
@@ -188,8 +172,8 @@ with columna_izquierda:
         "BPM de la pista",
         min_value=40,
         max_value=220,
+        value=st.session_state.bpm_actual,
         step=1,
-        key="bpm_original",
     )
     key_original = st.selectbox(
         "Clave armónica (Camelot)",
@@ -223,21 +207,19 @@ if st.button(
     if not artista_original.strip():
         st.warning("Introduce el artista original para continuar.")
     else:
-        try:
-            resultados = recomendar_matches(
-                artista_usuario=artista_original,
-                genero=genero_buscado,
-                energia=energia_deseada,
-                estructura=estructura_buscada,
-                bpm_orig=bpm_original,
-                key_orig=key_original,
-                api_key=openai_api_key.strip() or None,
-            )
-            st.session_state["resultados"] = resultados
-            st.session_state["referencia"] = cancion_referencia.strip()
-            st.session_state["artista_referencia"] = artista_original.strip()
-        except ValueError as error:
-            st.error(str(error))
+        resultados = recomendar_matches(
+            artista_usuario=artista_original,
+            genero=genero_buscado,
+            energia=energia_deseada,
+            estructura=estructura_buscada,
+            bpm_orig=bpm_original,
+            key_orig=key_original,
+            api_key=api_key.strip() or None,
+        )
+
+        st.session_state["resultados"] = resultados
+        st.session_state["referencia"] = cancion_referencia.strip()
+        st.session_state["artista_referencia"] = artista_original.strip()
 
 
 if "resultados" in st.session_state:
@@ -277,3 +259,19 @@ if "resultados" in st.session_state:
             with col_key:
                 st.metric("Key", cancion["key_camelot"])
             st.divider()
+
+        texto_setlist = ""
+        for posicion, (_, cancion) in enumerate(resultados.iterrows(), start=1):
+            texto_setlist += (
+                f"{posicion}. {cancion['titulo']} - {cancion['artista']} | "
+                f"{int(cancion['bpm'])} BPM | Key: {cancion['key_camelot']} | "
+                f"Sello: {cancion['sello']}\n"
+            )
+
+        st.download_button(
+            label="📥 Descargar Setlist (.txt)",
+            data=texto_setlist,
+            file_name="underground_setlist.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
