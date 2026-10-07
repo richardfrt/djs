@@ -18,6 +18,17 @@ COLUMNAS_REQUERIDAS = [
     "sello",
 ]
 
+VALORES_POR_DEFECTO = {
+    "titulo": "Desconocido",
+    "artista": "Desconocido",
+    "genero": "Desconocido",
+    "bpm": 126,
+    "key_camelot": "8A",
+    "energia": 7,
+    "estructura": "Desconocido",
+    "sello": "Desconocido",
+}
+
 DATOS_INICIALES = [
     {
         "titulo": "Spastik",
@@ -80,23 +91,27 @@ def cargar_datos():
         guardar_datos(dataframe)
         return dataframe
 
-    dataframe = pd.read_csv(ruta)
-    faltantes = [
-        columna
-        for columna in COLUMNAS_REQUERIDAS
-        if columna not in dataframe.columns
-    ]
-    if faltantes:
-        raise ValueError(
-            "dataset.csv no contiene las columnas requeridas: "
-            + ", ".join(faltantes)
-        )
+    try:
+        dataframe = pd.read_csv(ruta)
+    except pd.errors.EmptyDataError:
+        dataframe = pd.DataFrame()
+    for columna in COLUMNAS_REQUERIDAS:
+        if columna not in dataframe.columns:
+            dataframe[columna] = VALORES_POR_DEFECTO[columna]
 
     dataframe = dataframe[COLUMNAS_REQUERIDAS].copy()
-    dataframe["bpm"] = pd.to_numeric(dataframe["bpm"], errors="raise").astype(int)
+    dataframe["bpm"] = (
+        pd.to_numeric(dataframe["bpm"], errors="coerce")
+        .fillna(VALORES_POR_DEFECTO["bpm"])
+        .astype(int)
+    )
     dataframe["energia"] = pd.to_numeric(
-        dataframe["energia"], errors="raise"
-    ).astype(int)
+        dataframe["energia"], errors="coerce"
+    ).fillna(VALORES_POR_DEFECTO["energia"]).astype(int)
+    for columna in ("titulo", "artista", "genero", "key_camelot", "estructura", "sello"):
+        dataframe[columna] = dataframe[columna].fillna(
+            VALORES_POR_DEFECTO[columna]
+        )
     return dataframe
 
 
